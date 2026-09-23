@@ -9,6 +9,10 @@ set -euo pipefail
 # ChatGPT-native encrypted-payload relay, which is the hop that returns 429 when
 # the ChatGPT subscription quota is exhausted.
 #
+# The runtime loader is propagated through NODE_OPTIONS because codex-router's
+# start.mjs spawns router.mjs with process.execPath without forwarding
+# process.execArgv. This keeps the fix active in the real router child process.
+#
 # No ChatGPT.app patch, no second CODEX_HOME, no alternate picker, no MCP-based
 # replacement subagents, and no edits to the codex-router Git working tree.
 
@@ -249,7 +253,18 @@ JS
 set -euo pipefail
 PATCH_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ACTUAL_NODE="$(cat "$PATCH_DIR/actual-node")"
-exec "$ACTUAL_NODE" --import "$PATCH_DIR/register.mjs" "$@"
+REGISTER="$PATCH_DIR/register.mjs"
+IMPORT_OPT="--import=$REGISTER"
+
+# codex-router/start.mjs launches router.mjs and its other Node children with
+# process.execPath, without forwarding process.execArgv. NODE_OPTIONS is
+# inherited by those children, so the loader reaches the real router process.
+case " ${NODE_OPTIONS:-} " in
+  *" $IMPORT_OPT "*) ;;
+  *) export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }$IMPORT_OPT" ;;
+esac
+
+exec "$ACTUAL_NODE" "$@"
 SH
   chmod 700 "$WRAPPER_NODE"
 
@@ -373,6 +388,76 @@ for (const name of ["spawn_agent", "send_message", "followup_task"]) {
   }
 }
 console.log("self-test: OK");
+JS
+
+  log "Testing loader inheritance in a real child process..."
+
+  "$WRAPPER_NODE" --input-type=module - "$root" <<'JS'
+import { spawnSync } from "node:child_process";
+
+const root = process.argv[2];
+const code = String.raw\`
+import { pathToFileURL } from "node:url";
+const root = process.argv[2];
+const m = await import(pathToFileURL(root + "/src/namespace-relay.mjs").href);
+const tools = [{
+  type: "namespace",
+  name: "collaboration",
+  tools: [{
+    type: "function",
+    name: "spawn_agent",
+    parameters: {
+      type: "object",
+      properties: {
+        message: { type: "string" },
+        task_name: { type: "string" },
+        model: { type: "string" }
+      },
+      required: ["message", "task_name"]
+    }
+  }]
+}];
+const { namespaces } = m.flattenNamespaceTools(tools);
+const lookups = m.buildNamespaceLookups(namespaces);
+const event = {
+  type: "response.output_item.done",
+  item: {
+    type: "function_call",
+    name: "collaboration__spawn_agent",
+    arguments: JSON.stringify({ message: "PING", task_name: "worker" }),
+    call_id: "call-child-inheritance"
+  }
+};
+const routed = m.rewriteNamespaceFunctionCall(
+  event,
+  lookups,
+  "routemux/openai/gpt-6-luna"
+);
+if (!routed || routed.item?.namespace !== "collaboration" || routed.item?.name !== "spawn_agent") {
+  throw new Error("child process did not restore the native collaboration call");
+}
+if (!Array.isArray(routed.item.encrypted_function_args) || routed.item.encrypted_function_args.length !== 0) {
+  throw new Error("child process did not inherit the plaintext collaboration patch");
+}
+console.log("child-process self-test: OK");
+\`;
+
+const result = spawnSync(
+  process.execPath,
+  ["--input-type=module", "-", root],
+  {
+    input: code,
+    encoding: "utf8",
+    env: process.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  },
+);
+
+if (result.status !== 0) {
+  process.stderr.write(result.stderr || "");
+  throw new Error(\`child-process self-test failed with exit ${result.status}\`);
+}
+process.stdout.write(result.stdout);
 JS
 }
 
