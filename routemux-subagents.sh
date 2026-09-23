@@ -396,51 +396,47 @@ JS
 import { spawnSync } from "node:child_process";
 
 const root = process.argv[2];
-const code = String.raw\`
-import { pathToFileURL } from "node:url";
-const root = process.argv[2];
-const m = await import(pathToFileURL(root + "/src/namespace-relay.mjs").href);
-const tools = [{
-  type: "namespace",
-  name: "collaboration",
-  tools: [{
-    type: "function",
-    name: "spawn_agent",
-    parameters: {
-      type: "object",
-      properties: {
-        message: { type: "string" },
-        task_name: { type: "string" },
-        model: { type: "string" }
-      },
-      required: ["message", "task_name"]
-    }
-  }]
-}];
-const { namespaces } = m.flattenNamespaceTools(tools);
-const lookups = m.buildNamespaceLookups(namespaces);
-const event = {
-  type: "response.output_item.done",
-  item: {
-    type: "function_call",
-    name: "collaboration__spawn_agent",
-    arguments: JSON.stringify({ message: "PING", task_name: "worker" }),
-    call_id: "call-child-inheritance"
-  }
-};
-const routed = m.rewriteNamespaceFunctionCall(
-  event,
-  lookups,
-  "routemux/openai/gpt-6-luna"
-);
-if (!routed || routed.item?.namespace !== "collaboration" || routed.item?.name !== "spawn_agent") {
-  throw new Error("child process did not restore the native collaboration call");
-}
-if (!Array.isArray(routed.item.encrypted_function_args) || routed.item.encrypted_function_args.length !== 0) {
-  throw new Error("child process did not inherit the plaintext collaboration patch");
-}
-console.log("child-process self-test: OK");
-\`;
+const code = [
+  'import { pathToFileURL } from "node:url";',
+  'const root = process.argv[2];',
+  'const m = await import(pathToFileURL(root + "/src/namespace-relay.mjs").href);',
+  'const tools = [{',
+  '  type: "namespace",',
+  '  name: "collaboration",',
+  '  tools: [{',
+  '    type: "function",',
+  '    name: "spawn_agent",',
+  '    parameters: {',
+  '      type: "object",',
+  '      properties: {',
+  '        message: { type: "string" },',
+  '        task_name: { type: "string" },',
+  '        model: { type: "string" }',
+  '      },',
+  '      required: ["message", "task_name"]',
+  '    }',
+  '  }]',
+  '}];',
+  'const { namespaces } = m.flattenNamespaceTools(tools);',
+  'const lookups = m.buildNamespaceLookups(namespaces);',
+  'const event = {',
+  '  type: "response.output_item.done",',
+  '  item: {',
+  '    type: "function_call",',
+  '    name: "collaboration__spawn_agent",',
+  '    arguments: JSON.stringify({ message: "PING", task_name: "worker" }),',
+  '    call_id: "call-child-inheritance"',
+  '  }',
+  '};',
+  'const routed = m.rewriteNamespaceFunctionCall(event, lookups, "routemux/openai/gpt-6-luna");',
+  'if (!routed || routed.item?.namespace !== "collaboration" || routed.item?.name !== "spawn_agent") {',
+  '  throw new Error("child process did not restore the native collaboration call");',
+  '}',
+  'if (!Array.isArray(routed.item.encrypted_function_args) || routed.item.encrypted_function_args.length !== 0) {',
+  '  throw new Error("child process did not inherit the plaintext collaboration patch");',
+  '}',
+  'console.log("child-process self-test: OK");',
+].join("\n");
 
 const result = spawnSync(
   process.execPath,
@@ -455,11 +451,11 @@ const result = spawnSync(
 
 if (result.status !== 0) {
   process.stderr.write(result.stderr || "");
-  throw new Error(\`child-process self-test failed with exit ${result.status}\`);
+  throw new Error("child-process self-test failed with exit " + result.status);
 }
 process.stdout.write(result.stdout);
 JS
-}
+}}
 
 install_guard() {
   mkdir -p "$HOME/Library/LaunchAgents"
