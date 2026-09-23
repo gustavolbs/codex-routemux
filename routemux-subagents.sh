@@ -455,7 +455,7 @@ if (result.status !== 0) {
 }
 process.stdout.write(result.stdout);
 JS
-}}
+}
 
 install_guard() {
   mkdir -p "$HOME/Library/LaunchAgents"
