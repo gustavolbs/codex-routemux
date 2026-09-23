@@ -139,7 +139,7 @@ PY
   root="$(source_root)" || die "Could not locate the installed codex-router source root."
   control="$root/bin/control"
   [[ -x "$control" ]] || die "Missing codex-router control CLI: $control"
-  status="$("$control" chatgpt-session status --json 2>/dev/null || true)"
+  status="$("$control" chatgpt-session status 2>/dev/null || true)"
   python3 - "$status" <<'PY'
 import json, sys
 try:

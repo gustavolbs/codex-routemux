@@ -55,7 +55,7 @@ if "# BEGIN routemux-hybrid-provider" not in s:
 print("Hybrid provider: OK")
 PY
 
-SESSION_JSON="$("$CONTROL_BIN" chatgpt-session status --json 2>/dev/null || true)"
+SESSION_JSON="$("$CONTROL_BIN" chatgpt-session status 2>/dev/null || true)"
 python3 - "$SESSION_JSON" <<'PY'
 import json, sys
 try:
