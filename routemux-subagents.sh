@@ -187,10 +187,20 @@ const INJECTION = `  // ${MARKER}
     typeof sessionModel === "string" &&
     sessionModel.startsWith("routemux/") &&
     rewritten?.type === "function_call" &&
-    rewritten?.namespace === "collaboration" &&
-    ["spawn_agent", "send_message", "followup_task"].includes(rewritten.name)
+    ["spawn_agent", "send_message", "followup_task"].includes(rewritten.name) &&
+    (
+      rewritten?.namespace === "collaboration" ||
+      rewritten?.namespace === undefined
+    )
   ) {
-    rewritten = { ...rewritten, encrypted_function_args: [] };
+    // Responses-native RouteMux models can echo collaboration calls as bare
+    // names even when the request carried a namespace. Restore the namespace
+    // before Codex dispatches the call and mark both shapes as plaintext.
+    rewritten = {
+      ...rewritten,
+      namespace: "collaboration",
+      encrypted_function_args: [],
+    };
   }
 `;
 
@@ -358,6 +368,7 @@ const tools = [{
 
 const { namespaces } = m.flattenNamespaceTools(tools);
 const lookups = m.buildNamespaceLookups(namespaces);
+const emptyLookups = m.buildNamespaceLookups(new Map());
 const args = {
   spawn_agent: { message: "x", task_name: "worker" },
   send_message: { target: "worker", message: "x" },
@@ -365,26 +376,36 @@ const args = {
 };
 
 for (const name of ["spawn_agent", "send_message", "followup_task"]) {
-  const event = {
-    type: "response.output_item.done",
-    item: {
-      type: "function_call",
-      name: `collaboration__${name}`,
-      arguments: JSON.stringify(args[name]),
-      call_id: `call-${name}`,
-    },
-  };
-  const routed = m.rewriteNamespaceFunctionCall(event, lookups, "routemux/openai/gpt-6-luna");
-  if (!routed || routed.item?.namespace !== "collaboration" || routed.item?.name !== name) {
-    throw new Error(`${name}: native namespace restoration failed`);
-  }
-  if (!Array.isArray(routed.item.encrypted_function_args) || routed.item.encrypted_function_args.length !== 0) {
-    throw new Error(`${name}: plaintext marker was not injected`);
-  }
+  for (const wireName of [`collaboration__${name}`, name]) {
+    const event = {
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        name: wireName,
+        arguments: JSON.stringify(args[name]),
+        call_id: `call-${wireName}`,
+      },
+    };
+    const routed = m.rewriteNamespaceFunctionCall(
+      event,
+      wireName.includes("__") ? lookups : emptyLookups,
+      "routemux/openai/gpt-6-luna",
+    );
+    if (!routed || routed.item?.namespace !== "collaboration" || routed.item?.name !== name) {
+      throw new Error(`${wireName}: native namespace restoration failed`);
+    }
+    if (!Array.isArray(routed.item.encrypted_function_args) || routed.item.encrypted_function_args.length !== 0) {
+      throw new Error(`${wireName}: plaintext marker was not injected`);
+    }
 
-  const native = m.rewriteNamespaceFunctionCall(event, lookups, "gpt-6-luna");
-  if (native?.item && Object.hasOwn(native.item, "encrypted_function_args")) {
-    throw new Error(`${name}: native GPT call was modified`);
+    const native = m.rewriteNamespaceFunctionCall(
+      event,
+      wireName.includes("__") ? lookups : emptyLookups,
+      "gpt-6-luna",
+    );
+    if (native?.item && Object.hasOwn(native.item, "encrypted_function_args")) {
+      throw new Error(`${wireName}: native GPT call was modified`);
+    }
   }
 }
 console.log("self-test: OK");
@@ -491,10 +512,12 @@ remove_guard() {
 ensure_router_service() {
   "$ENSURE" --now
 
-  local current
+  local root current
+  root="$(source_root)" || die "Could not locate codex-router source root."
   current="$(plist_arg 0 "$ROUTER_PLIST" 2>/dev/null || true)"
   [[ "$current" == "$WRAPPER_NODE" ]] \
     || die "The codex-router LaunchAgent did not switch to the compatibility runtime."
+  "$root/bin/control" service restart >/dev/null
 }
 
 restore_router_service() {
