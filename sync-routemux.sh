@@ -2,10 +2,13 @@
 set -euo pipefail
 
 # RouteMux -> ChatGPT/Codex Desktop native picker sync.
-# Assumes the one-time HYBRID provider migration is already applied:
+# Assumes the provider layout below is already applied (see CODEX_STORAGE_GUARDRAILS.md §4):
 #   gpt-*       -> ChatGPT subscription
-#   routemux/*  -> RouteMux
-#   model_provider = "custom"
+#   routemux/*  -> RouteMux (via codex-router loopback)
+#   root model_provider = openai (built-in; ChatGPT account, weekly limit and GPT
+#                                 threads visible in the Desktop). Set
+#                                 ROUTEMUX_EXPECT_PROVIDER=custom for the old
+#                                 login-free hybrid layout.
 #   signed-routing = OFF
 
 ROUTER_BIN="${ROUTER_BIN:-codex-router}"
@@ -48,11 +51,15 @@ s = p.read_text(encoding="utf-8")
 root = re.split(r'(?m)^\s*\[', s, maxsplit=1)[0]
 m = re.search(r'(?m)^\s*model_provider\s*=\s*["\']([^"\']+)["\']', root)
 provider = m.group(1) if m else "openai"
-if provider != "custom":
-    raise SystemExit(f"Expected model_provider='custom', found {provider!r}.")
+import os
+expected = os.environ.get("ROUTEMUX_EXPECT_PROVIDER", "openai")
+if provider != expected:
+    raise SystemExit(f"Expected root model_provider={expected!r}, found {provider!r}.")
 if "# BEGIN routemux-hybrid-provider" not in s:
-    raise SystemExit("Hybrid provider block is missing from config.toml.")
-print("Hybrid provider: OK")
+    raise SystemExit("Hybrid provider block ([model_providers.custom]) is missing from config.toml.")
+if not re.search(r'(?m)^\s*openai_base_url\s*=\s*["\']http://127\.0\.0\.1:\d+/v1["\']', root):
+    raise SystemExit("openai_base_url must point at the local codex-router loopback.")
+print(f"Provider layout: OK (root provider {provider})")
 PY
 
 SESSION_JSON="$("$CONTROL_BIN" chatgpt-session status 2>/dev/null || true)"
@@ -254,7 +261,7 @@ echo
 echo "DONE"
 echo "  Native gpt-*  -> ChatGPT subscription"
 echo "  routemux/*    -> RouteMux"
-echo "  provider      -> custom"
+echo "  provider      -> ${ROUTEMUX_EXPECT_PROVIDER:-openai} (root)"
 echo "  signed-routing stays OFF"
 echo
 echo "Now reopen the official ChatGPT Desktop."
